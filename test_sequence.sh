@@ -14,7 +14,8 @@ TEST_DIR="$(mktemp -d)"
 cleanup() {
     rm -rf "$TEST_DIR"
 }
-trap cleanup EXIT
+# trap cleanup EXIT
+echo "TEST_DIR=$TEST_DIR"
 
 cd "$TEST_DIR"
 

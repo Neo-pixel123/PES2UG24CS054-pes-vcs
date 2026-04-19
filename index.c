@@ -135,10 +135,34 @@ int index_status(const Index *index) {
 //
 // Returns 0 on success, -1 on error.
 int index_load(Index *index) {
-    // TODO: Implement index loading
-    // (See Lab Appendix for logical steps)
-    (void)index;
-    return -1;
+    FILE *f = fopen(".pes/index", "r");
+    if (!f) {
+        index->count = 0;
+        return 0;
+    }
+
+    index->count = 0;
+
+    char hash_hex[65];
+
+    while (index->count < MAX_INDEX_ENTRIES) {
+        IndexEntry *e = &index->entries[index->count];
+
+        int ret = fscanf(f, "%o %64s %lu %u %[^\n]\n",
+                         &e->mode,
+                         hash_hex,
+                         &e->mtime_sec,
+                         &e->size,
+                         e->path);
+
+        if (ret != 5) break;
+
+        hex_to_hash(hash_hex, &e->hash);
+        index->count++;
+    }
+
+    fclose(f);
+    return 0;
 }
 
 // Save the index to .pes/index atomically.
@@ -152,10 +176,31 @@ int index_load(Index *index) {
 //
 // Returns 0 on success, -1 on error.
 int index_save(const Index *index) {
-    // TODO: Implement atomic index saving
-    // (See Lab Appendix for logical steps)
-    (void)index;
-    return -1;
+    FILE *f = fopen(".pes/index.tmp", "w");
+    if (!f) return -1;
+
+    char hash_hex[65];
+
+    for (int i = 0; i < index->count; i++) {
+        const IndexEntry *e = &index->entries[i];
+
+        hash_to_hex(&e->hash, hash_hex);
+
+        fprintf(f, "%o %s %lu %u %s\n",
+                e->mode,
+                hash_hex,
+                e->mtime_sec,
+                e->size,
+                e->path);
+    }
+
+    fflush(f);
+    fsync(fileno(f));
+    fclose(f);
+
+    if (rename(".pes/index.tmp", ".pes/index") != 0) return -1;
+
+    return 0;
 }
 
 // Stage a file for the next commit.
@@ -168,8 +213,50 @@ int index_save(const Index *index) {
 //
 // Returns 0 on success, -1 on error.
 int index_add(Index *index, const char *path) {
-    // TODO: Implement file staging
-    // (See Lab Appendix for logical steps)
-    (void)index; (void)path;
-    return -1;
+    FILE *f = fopen(path, "rb");
+    if (!f) return -1;
+
+    fseek(f, 0, SEEK_END);
+    long size = ftell(f);
+    rewind(f);
+
+    void *buffer = size > 0 ? malloc(size) : NULL;
+    if (size > 0 && !buffer) {
+        fclose(f);
+        return -1;
+    }
+
+    if (size > 0 && fread(buffer, 1, size, f) != (size_t)size) {
+        free(buffer);
+        fclose(f);
+        return -1;
+    }
+
+    fclose(f);
+
+    ObjectID id;
+    if (object_write(OBJ_BLOB, buffer, size, &id) != 0) {
+        free(buffer);
+        return -1;
+    }
+
+    free(buffer);
+
+    struct stat st;
+    if (stat(path, &st) != 0) return -1;
+
+    IndexEntry *e = index_find(index, path);
+
+    if (!e) {
+        if (index->count >= MAX_INDEX_ENTRIES) return -1;
+        e = &index->entries[index->count++];
+    }
+
+    e->mode = st.st_mode;
+    e->hash = id;
+    e->mtime_sec = st.st_mtime;
+    e->size = st.st_size;
+    strcpy(e->path, path);
+
+    return index_save(index);
 }
